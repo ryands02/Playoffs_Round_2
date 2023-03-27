@@ -1,0 +1,84 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-03-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(xgboost)
+
+# Load NBA data from 2019 to 2023
+nba_data <- cleandata22
+
+# Convert date column to a datetime format
+nba_data$dateGame <- as.Date(nba_data$dateGame)
+
+# Split data into training and testing sets
+set.seed(123)
+train_idx <- sample(nrow(nba_data), nrow(nba_data) * 0.8)
+train_data <- nba_data[train_idx, ]
+test_data <- nba_data[-train_idx, ]
+
+# Feature engineering
+train_data <- train_data %>%
+  mutate(win_pct_diff = team1_win_pct - team2_win_pct) %>%
+  mutate(l10_team1_pts_diff = team1_pts - lag(team1_pts, n = 10)) %>%
+  mutate(l10_team2_pts_diff = team2_pts - lag(team2_pts, n = 10))
+
+test_data <- test_data %>%
+  mutate(win_pct_diff = team1_win_pct - team2_win_pct) %>%
+  mutate(l10_team1_pts_diff = team1_pts - lag(team1_pts, n = 10)) %>%
+  mutate(l10_team2_pts_diff = team2_pts - lag(team2_pts, n = 10))
+
+# Train and evaluate XGBoost model
+xgb_grid <- expand.grid(nrounds = 100,
+                        max_depth = c(3, 5, 7),
+                        eta = c(0.01, 0.1, 0.3),
+                        gamma = c(0, 0.2, 0.4),
+                        colsample_bytree = c(0.5, 0.7, 1))
+
+xgb_trcontrol <- trainControl(method = "cv", number = 5, verboseIter = TRUE, returnResamp = "all")
+
+xgb_model <- train(point_spread ~ win_pct_diff + l10_team1_pts_diff + l10_team2_pts_diff,
+                   data = train_data,
+                   method = "xgbTree",
+                   trControl = xgb_trcontrol,
+                   tuneGrid = xgb_grid,
+                   verbose = FALSE)
+
+# Make predictions on test set
+test_pred <- predict(xgb_model, newdata = test_data)
+
+# Evaluate model performance
+mse <- mean((test_data$point_spread - test_pred)^2)
+mae <- mean(abs(test_data$point_spread - test_pred))
+r_squared <- cor(test_data$point_spread, test_pred)^2
+
+cat("Mean squared error:", mse, "\n")
+cat("Mean absolute error:", mae, "\n")
+cat("R-squared:", r_squared, "\n")
+
+# Make predictions on future games
+future_data <- data.frame(date = as.Date("2023-03-24"),
+                          team1 = "Los Angeles Lakers",
+                          team2 = "Brooklyn Nets",
+                          team1_win_pct = 0.7,
+                          team2_win_pct = 0.6,
+                          l10_team1_pts_diff = 8,
+                          l10_team2_pts_diff = 5)
+
+future_pred <- predict(xgb_model, newdata = future_data)
+cat("Predicted point spread for Lakers vs Nets on March 24, 2023:", future_pred, "\n")
+
+
+```
+
+
