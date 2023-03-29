@@ -1,0 +1,125 @@
+---
+title: "XGBoost Model for Predicting NBA Points Spread"
+output: html_document
+date: "2023-03-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+rm(list=ls())
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(caret)
+library(xgboost)
+library(readr)
+library(zoo)
+
+Win_Pct_Season <- read_csv("Win_Pct_Season.csv")
+
+# Add Point Spread Column
+Win_Pct_Season$point_spread = Win_Pct_Season$PTS_H - Win_Pct_Season$PTS_A
+  
+# Load NBA data from 2019 to 2023
+nba_data <- Win_Pct_Season
+
+homes = Win_Pct_Season %>% filter(Home == "Charlotte Hornets")
+
+# Convert date column to a datetime format
+nba_data$dateGame <- as.Date(nba_data$dateGame)
+
+
+
+# Split data into training and testing sets
+set.seed(123)
+train_idx <- sample(nrow(nba_data), nrow(nba_data) * 0.8)
+train_data <- nba_data[train_idx, ]
+test_data <- nba_data[-train_idx, ]
+
+# homePoints <- train_data %>%
+#   dplyr::select(idGame,Home,PTS_H) %>%
+#   filter(Home == "Charlotte Hornets") %>%
+#   mutate(l10_teamH_pts_diff = PTS_H - lag(PTS_H, n = 10))
+
+# Feature engineering
+train_data <- train_data %>%
+  arrange(idGame) %>%
+  group_by(Home) %>%
+  mutate(l10_teamH_pts_diff = PTS_H - zoo::rollapply(PTS_H, width = 10, FUN = mean, fill = NA, align = "right")) %>%
+  ungroup()
+
+train_data <- train_data %>%
+  arrange(idGame) %>%
+  group_by(Away) %>%
+  mutate(l10_teamA_pts_diff = PTS_A - zoo::rollapply(PTS_A, width = 10, FUN = mean, fill = NA, align = "right")) %>%
+  ungroup()
+
+
+test_data <- test_data %>%
+  arrange(idGame) %>%
+  group_by(Home) %>%
+  mutate(win_pct_diff = win_pct_H - win_pct_A) %>%
+  mutate(l10_teamH_pts_diff = PTS_H - zoo::rollapply(PTS_H, width = 10, FUN = mean, fill = NA, align = "right")) %>%
+  ungroup()
+
+test_data <- test_data %>%
+  arrange(idGame) %>%
+  group_by(Away) %>%
+  mutate(win_pct_diff = win_pct_H - win_pct_A) %>%
+  mutate(l10_teamA_pts_diff = PTS_A - zoo::rollapply(PTS_A, width = 10, FUN = mean, fill = NA, align = "right")) %>%
+  ungroup()
+
+
+# Train and evaluate XGBoost model
+xgb_grid <- expand.grid(nrounds = 100,
+                        max_depth = c(3, 5, 7),
+                        eta = c(0.01, 0.1, 0.3),
+                        gamma = c(0, 0.2, 0.4),
+                        colsample_bytree = c(0.5, 0.7, 1),
+                        min_child_weight = c(1, 3, 5),
+                        subsample = c(0.5, 0.7, 1))
+
+xgb_trcontrol <- trainControl(method = "cv", number = 5, verboseIter = TRUE, returnResamp = "all")
+
+
+xgb_model <- train(point_spread ~ win_pct_diff + l10_teamH_pts_diff + l10_teamA_pts_diff,
+                   data = train_data,
+                   method = "xgbTree",
+                   trControl = xgb_trcontrol,
+                   tuneGrid = xgb_grid,
+                   verbose = FALSE,
+                   na.action=na.exclude)
+
+# Make predictions on test set
+test_pred <- predict(xgb_model, newdata = test_data)
+
+# Evaluate model performance
+mse <- mean((test_data$point_spread - test_pred)^2)
+mae <- mean(abs(test_data$point_spread - test_pred))
+r_squared <- cor(test_data$point_spread, test_pred)^2
+
+cat("Mean squared error:", mse, "\n")
+cat("Mean absolute error:", mae, "\n")
+cat("R-squared:", r_squared, "\n")
+
+# Make predictions on future games
+future_data <- data.frame(date = as.Date("2023-03-24"),
+                          teamH = "Memphis Grizzlies",
+                          teamA = "Houston Rockets",
+                          teamH_win_pct = 0.86,
+                          teamA_win_pct = 0.16,
+                          win_pct_diff = 0.7,
+                          l10_teamH_pts_diff = 8,
+                          l10_teamA_pts_diff = 5)
+
+future_pred <- predict(xgb_model, newdata = future_data)
+cat("Predicted point spread for Grizzlies vs Rockets on March 24, 2023:", future_pred, "\n")
+
+
+```
+
+
