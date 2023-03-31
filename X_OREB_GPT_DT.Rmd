@@ -1,0 +1,69 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-03-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+predict_oreb <- function(team1, team2, season) {
+  # Load the necessary packages
+  library(nbastatR)
+  library(caret)
+  library(rpart)
+  library(tidyverse)
+
+  # Load the data
+  df <- read_csv("playerdata42.csv")
+
+  # Aggregate the data by game and team, and calculate total rebounds and other stats
+  agg_data <- df %>%
+    group_by(yearSeason, idGame) %>%
+    mutate(opponent = if_else(Home == nameTeam, Away, Home)) %>%
+    group_by(yearSeason, idGame, nameTeam, opponent, Home) %>%
+    summarize(fg3a = sum(fg3a),
+              fg2a = sum(fg2a),
+              dreb = sum(dreb),
+              oreb = sum(oreb),
+              stl = sum(stl),
+              minutes = sum(minutes))
+
+  # Filter data for the given season and the two teams
+  test.data <- agg_data %>%
+    filter(yearSeason == season) %>%
+    filter((nameTeam == team1 & opponent == team2) | (nameTeam == team2 & opponent == team1)) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl)
+
+  # Train the decision tree model
+  train.data <- agg_data %>%
+    filter(yearSeason != season) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl)
+
+  # Define the grid of hyperparameters to search
+  grid <- expand.grid(cp = seq(0, 0.05, 0.001))
+
+  # Train the decision tree model using grid search
+  dt.model <- train(oreb ~ fg3a + fg2a + dreb + minutes + opponent + Home, 
+                    data = train.data, 
+                    method = "rpart", 
+                    tuneGrid = grid,
+                    trControl = trainControl(method = "cv", number = 10))
+
+  # Make predictions on the testing set
+  predictions <- predict(dt.model, newdata = test.data)
+
+  # Return the predicted OREB for the specific game
+  return(predictions[1]+predictions[2])
+}
+
+```
+
+```{r}
+predict_oreb("Dallas Mavericks", "Indiana Pacers", 2023)
+```
+
+
+
