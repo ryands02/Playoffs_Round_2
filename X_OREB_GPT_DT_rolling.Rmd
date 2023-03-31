@@ -1,0 +1,141 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-03-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+predict_oreb <- function(team1, team2, season) {
+  # Load the necessary packages
+  library(nbastatR)
+  library(caret)
+  library(rpart)
+  library(tidyverse)
+
+  # Load the data
+  df <- read_csv("playerdata42.csv")
+
+  # Aggregate the data by game and team, and calculate total rebounds and other stats
+  agg_data <- df %>%
+    group_by(yearSeason, idGame) %>%
+    mutate(opponent = if_else(Home == nameTeam, Away, Home)) %>%
+    group_by(yearSeason, idGame, nameTeam, opponent, Home) %>%
+    summarize(fg3a = sum(fg3a),
+              fg2a = sum(fg2a),
+              dreb = sum(dreb),
+              oreb = sum(oreb),
+              stl = sum(stl),
+              minutes = sum(minutes))
+
+  # Filter data for the given season and the two teams
+  test.data <- agg_data %>%
+    filter(yearSeason == season) %>%
+    filter((nameTeam == team1 & opponent == team2) | (nameTeam == team2 & opponent == team1)) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl)
+
+  # Train the decision tree model
+  train.data <- agg_data %>%
+    filter(yearSeason != season) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl)
+
+  # Define the grid of hyperparameters to search
+  grid <- expand.grid(cp = seq(0, 0.05, 0.001))
+
+  # Train the decision tree model using grid search
+  dt.model <- train(oreb ~ fg3a + fg2a + dreb + minutes + opponent + Home, 
+                    data = train.data, 
+                    method = "rpart", 
+                    tuneGrid = grid,
+                    trControl = trainControl(method = "cv", number = 10))
+
+  # Make predictions on the testing set
+  predictions <- predict(dt.model, newdata = test.data)
+
+  # Return the predicted OREB for the specific game
+  return(predictions[1]+predictions[2])
+}
+
+```
+
+## Rolling Means
+
+```{r}
+predict_oreb2 <- function(team1, team2, season) {
+# Load the necessary packages
+  library(nbastatR)
+  library(caret)
+  library(rpart)
+  library(tidyverse)
+
+  # Load the data
+  df <- read_csv("playerdata42.csv")
+
+  # Aggregate the data by game and team, and calculate total rebounds and other stats
+  agg_data <- df %>%
+    group_by(yearSeason, idGame) %>%
+    mutate(opponent = if_else(Home == nameTeam, Away, Home)) %>%
+    group_by(yearSeason, idGame, nameTeam, opponent, Home) %>%
+    summarize(fg3a = sum(fg3a),
+              fg2a = sum(fg2a),
+              dreb = sum(dreb),
+              oreb = sum(oreb),
+              stl = sum(stl),
+              minutes = sum(minutes)) %>%
+    mutate(
+      fg3a_roll=rollmean(fg3a,k=10,fill=NA,align="right"), 
+      fg2a_roll=rollmean(fg2a,k=10,fill=NA,align="right"), 
+      dreb_roll=rollmean(dreb,k=10,fill=NA,align="right"),
+      oreb_roll=rollmean(oreb,k=10,fill=NA,align="right"),
+      stl_roll=rollmean(stl,k=10,fill=NA,align="right"),
+      minutes_roll=rollmean(minutes,k=10,fill=NA,align="right"))
+  
+  agg_data2 <- agg_data
+  
+  agg_data2$fg3a_roll=rollmean(agg_data$fg3a,k=10,fill=NA,align="right")
+  agg_data2$fg2a_roll=rollmean(agg_data$fg2a,k=10,fill=NA,align="right")
+  agg_data2$minutes_roll=rollmean(agg_data$minutes,k=10,fill=NA,align="right")
+  agg_data2$stl_roll=rollmean(agg_data$stl,k=10,fill=NA,align="right")
+  agg_data2$oreb_roll=rollmean(agg_data$oreb,k=10,fill=NA,align="right")
+  agg_data2$dreb_roll=rollmean(agg_data$dreb,k=10,fill=NA,align="right")
+  
+  # Remove NA's that came from rolling means calculations
+  agg_data3 <- drop_na(agg_data2,oreb_roll)
+
+  # Filter data for the given season and the two teams
+  test.data <- agg_data3 %>%
+    filter(yearSeason == season) %>%
+    filter((nameTeam == team1 & opponent == team2) | (nameTeam == team2 & opponent == team1)) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl, fg3a_roll, fg2a_roll, dreb_roll, oreb_roll, stl_roll, minutes_roll)
+
+  # Train the decision tree model
+  train.data <- agg_data3 %>%
+    filter(yearSeason != season) %>%
+    select(yearSeason, idGame, nameTeam, opponent, Home, fg3a, fg2a, dreb, oreb, minutes, stl, fg3a_roll, fg2a_roll, dreb_roll, oreb_roll, stl_roll, minutes_roll)
+
+  # Define the grid of hyperparameters to search
+  grid <- expand.grid(cp = seq(0, 0.05, 0.001))
+
+  # Train the decision tree model using grid search
+  dt.model <- train(oreb ~ fg3a + fg2a + dreb + minutes + opponent + Home + fg3a_roll + fg2a_roll + dreb_roll + oreb_roll + stl_roll + minutes_roll, 
+                    data = train.data, 
+                    method = "rpart", 
+                    tuneGrid = grid,
+                    trControl = trainControl(method = "cv", number = 10))
+
+  # Make predictions on the testing set
+  predictions <- predict(dt.model, newdata = test.data)
+
+  # Return the predicted OREB for the specific game
+  return(predictions[1]+predictions[2])
+}
+```
+
+```{r}
+predict_oreb("Dallas Mavericks", "Indiana Pacers", 2023)
+predict_oreb2("Dallas Mavericks", "Indiana Pacers", 2023)
+```
+
